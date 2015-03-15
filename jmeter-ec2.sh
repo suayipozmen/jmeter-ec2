@@ -22,6 +22,9 @@
 # along with JMeter-ec2.  If not, see <http://www.gnu.org/licenses/>.
 #
 
+rm -f ~/.ssh/known_hosts
+
+
 DATETIME=$(date "+%s")
 
 # First make sure we have the required params and if not print out an instructive message
@@ -53,6 +56,9 @@ if [ -z "$percent" ] ; then percent=100 ; fi
 # default to TRUE if setup is not specified
 if [ -z "$setup" ] ; then setup="TRUE" ; fi
 
+# default to TRUE if setup is not specified
+if [ -z "$install" ] ; then install="FALSE" ; fi
+
 # default to TRUE if terminate is not specified
 if [ -z "$terminate" ] ; then terminate="TRUE" ; fi
 
@@ -60,7 +66,7 @@ if [ -z "$terminate" ] ; then terminate="TRUE" ; fi
 if [ -z "$count" ] ; then count=1 ; fi
 instance_count=$count
 
-LOCAL_HOME="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+LOCAL_HOME="$( cd "$( dirname "${BASH_SOURCE[1]}" )" && pwd )"
 
 # Execute the jmeter-ec2.properties file, establishing these constants.
 . $LOCAL_HOME/jmeter-ec2.properties
@@ -333,11 +339,11 @@ function runsetup() {
 
 		# assign a name tag to each instance
 		echo "assigning tags..."
-		(ec2-create-tags --region $REGION ${attempted_instanceids[@]} --tag ProductKey=$project)
-        (ec2-create-tags --region $REGION ${attempted_instanceids[@]} --tag Service=prod)
-        (ec2-create-tags --region $REGION ${attempted_instanceids[@]} --tag Description=PerformanceTest)
-        (ec2-create-tags --region $REGION ${attempted_instanceids[@]} --tag Owner=$EMAIL)
-        (ec2-create-tags --region $REGION ${attempted_instanceids[@]} --tag ContactEmail=$EMAIL)
+#		(ec2-create-tags --region $REGION ${attempted_instanceids[@]} --tag ProductKey=$project)
+#        (ec2-create-tags --region $REGION ${attempted_instanceids[@]} --tag Service=prod)
+#        (ec2-create-tags --region $REGION ${attempted_instanceids[@]} --tag Description=PerformanceTest)
+#        (ec2-create-tags --region $REGION ${attempted_instanceids[@]} --tag Owner=$EMAIL)
+#        (ec2-create-tags --region $REGION ${attempted_instanceids[@]} --tag ContactEmail=$EMAIL)
 		(ec2-create-tags --region $REGION ${attempted_instanceids[@]} --tag Name="jmeter-ec2-$project")
 		wait
         echo "complete"
@@ -353,26 +359,43 @@ function runsetup() {
 			wait
             echo "complete"
 
-            echo
-            echo -n "checking elastic ips..."
-            for x in "${!instanceids[@]}" ; do
-				# check for ssh connectivity on the new address
-	            while ssh -o StrictHostKeyChecking=no -q -i $PEM_PATH/$PEM_FILE \
-	                $USER@${hosts[x]} -p $REMOTE_PORT true && test; \
-	                do echo -n .; sleep 1; done
-	            # Note. If any IP is already in use on an instance that is still running then the ssh check above will return
-	            # a false positive. If this scenario is common you should put a sleep statement here.
-            done
-			wait
-            echo "complete"
+             echo
+             echo -n "checking elastic ips..."
+#             for x in "${!instanceids[@]}" ; do
+# 				# check for ssh connectivity on the new address
+# 	            while ssh -o StrictHostKeyChecking=no -q -i $PEM_PATH/$PEM_FILE \
+# 	                $USER@${hosts[x]} -p $REMOTE_PORT true && test; \
+# 	                do echo -n .; sleep 1; done
+# 	            # Note. If any IP is already in use on an instance that is still running then the ssh check above will return
+# 	            # a false positive. If this scenario is common you should put a sleep statement here.
+#             done
+# 			wait
+             echo "complete"
             echo
         fi
 
         # Tell install.sh to attempt to install JAVA
         attemptjavainstall=1
     else # the property REMOTE_HOSTS is set so we wil use this list of predefined hosts instead
-        hosts=(`echo $REMOTE_HOSTS | tr "," "\n" | tr -d ' '`)
-        instance_count=${#hosts[@]}
+        temphosts=(`echo $REMOTE_HOSTS | tr "," "\n" | tr -d ' '`)
+        hosts_count=${#temphosts[@]}
+        
+        if [ "$instance_count" -gt "$hosts_count" ] ; then
+		echo
+                echo "You are trying to launch $instance_count instance but you have only specified $hosts_count Remote Hosts"
+                echo "If you wish to use Staitc IPs for each test instance then you must increase the list of values given for REMOTE_HOSTS in the properties file."
+                echo
+                echo "Script exiting..."
+                echo
+                exit
+        
+        fi
+        
+        
+        #use instance_count of REMOTE_HOSTS 
+        hosts=("${temphosts[@]:0:$instance_count}")
+        
+        #instance_count=${#hosts[@]}
         # Tell install.sh to not attempt to install JAVA
         attemptjavainstall=0
         echo
@@ -381,25 +404,27 @@ function runsetup() {
         echo "   -------------------------------------------------------------------------------------"
         echo
         echo
-
+        
+        
 	    # Check if remote hosts are up
 	    for host in ${hosts[@]} ; do
 	        if [ ! "$(ssh -q -q \
 	            -o StrictHostKeyChecking=no \
 	            -o "BatchMode=yes" \
-	            -o "ConnectTimeout 15" \
+	            -o "ConnectTimeout=15" \
 	            -i "$PEM_PATH/$PEM_FILE" \
 	            -p $REMOTE_PORT \
-	            $USER@$host echo up 2>&1)" == "up" ] ; then
+	            $USER@$host "echo up;rm -f $REMOTE_HOME/*.log;rm -f $REMOTE_HOME/*.jmx;rm -f $REMOTE_HOME/*.jtl;rm -rf $REMOTE_HOME/data*" 2>&1)" == "up" ] ; then
 	            echo "Host $host is not responding, script exiting..."
 	            echo
 	            exit
 	        fi
+	        
 	    done
     fi
-
+    
     # scp install.sh
-    if [ "$setup" = "TRUE" ] ; then
+    if [ "$install" = "TRUE" ] ; then
     	echo -n "copying install.sh to $instance_count server(s)..."
 	    for host in ${hosts[@]} ; do
 	        (scp -q -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no \
@@ -449,16 +474,26 @@ function runsetup() {
     working_jmx="$project_home/working"
     temp_jmx="$project_home/temp"
 
+   
+   
+   
+   for y in "${!hosts[@]}" ; do
+
+    cp "$working_jmx" "$working_jmx"_"$y"
+    current_jmx="$working_jmx"_"$y"
+    
     # first filepaths (this will help with things like csv files)
     # edit any 'stringProp filename=' references to use $REMOTE_DIR in place of whatever local path was being used
     # we assume that the required dat file is copied into the local /data directory
-    filepaths=$(awk 'BEGIN { FS = ">" } ; /<stringProp name=\"filename\">[^<]*<\/stringProp>/ {print $2}' $working_jmx | cut -d'<' -f1) # pull out filepath
+    filepaths=$(awk 'BEGIN { FS = ">" } ; /<stringProp name=\"filename\">[^<]*<\/stringProp>/ {print $2}' $current_jmx | cut -d'<' -f1) # pull out filepath
     i=1
     while read filepath ; do
         if [ -n "$filepath" ] ; then # this entry is not blank
             # extract the filename from the filepath using '/' separator
             filename=$( echo $filepath | awk -F"/" '{print $NF}' )
-            endresult="$REMOTE_HOME"/data/"$filename"
+            endresult="$REMOTE_HOME"/data/c"$y"-"$filename"
+            echo "endresult $endresult ";
+            
             if [[ $filepath =~ .*\$.* ]] ; then
                 echo "The path $filepath contains a $ char, this currently fails the awk sub command."
                 echo "You'll have to remove these from all filepaths. Sorry."
@@ -468,22 +503,17 @@ function runsetup() {
             fi
             awk '/<stringProp name=\"filename\">[^<]*<\/stringProp>/{c++;if(c=='"$i"') \
                                    {sub("filename\">'"$filepath"'<","filename\">'"$endresult"'<")}}1'  \
-                                   $working_jmx > $temp_jmx
-            rm $working_jmx
-            mv $temp_jmx $working_jmx
+                                   $current_jmx > $temp_jmx
+            #rm $working_jmx
+            mv $temp_jmx $current_jmx
         fi
         # increment i
         i=$((i+1))
     done <<<"$filepaths"
-
-    # now we use the same working file to edit thread counts
-    # to cope with the problem of trying to spread 10 threads over 3 hosts (10/3 has a remainder) the script creates a unique jmx for each host
-    # and then passes out threads to them on a round robin basis
-    # as part of this we begin here by creating a working jmx file for each separate host using _$y to isolate
-    for y in "${!hosts[@]}" ; do
-        # for each host create a working copy of the jmx file
-        cp "$working_jmx" "$working_jmx"_"$y"
-    done
+  done   
+   
+   
+   
     # loop through each threadgroup and then use a nested loop within that to edit the file for each host
        # pull out the current values for each thread group
        threadgroup_threadcounts=(`awk 'BEGIN { FS = ">" } ; /ThreadGroup\.num_threads\">[^<]*</ {print $2}' $working_jmx | cut -d'<' -f1`) # put the current thread counts into variable
@@ -658,6 +688,10 @@ function runsetup() {
 	            (scp -q -C -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no \
 	                                          -i "$PEM_PATH/$PEM_FILE" -P $REMOTE_PORT \
 	                                          $project_home/plugins/*.jar \
+	                                          $USER@$host:$REMOTE_HOME/$JMETER_VERSION/lib/) &
+		    (scp -q -C -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no \
+	                                          -i "$PEM_PATH/$PEM_FILE" -P $REMOTE_PORT \
+	                                          $project_home/plugins/ext/*.jar \
 	                                          $USER@$host:$REMOTE_HOME/$JMETER_VERSION/lib/ext/) &
 	        done
 	        wait
@@ -901,16 +935,19 @@ function runcleanup() {
     fi
 
 
+    mkdir -p $project_home/results/$DATETIME/
+    
     # process the files into one jtl results file
     echo -n "processing results..."
     for (( i=0; i<$instance_count; i++ )) ; do
         cat $project_home/$project-$DATETIME-$i.jtl >> $project_home/$project-$DATETIME-grouped.jtl
-        rm $project_home/$project-$DATETIME-$i.jtl # removes the individual results files (from each host) - might be useful to some people to keep these files?
+        mv $project_home/$project-$DATETIME-$i.jtl $project_home/results/$DATETIME/$project-$DATETIME-$i.jtl # removes the individual results files (from each host) - might be useful to some people to keep these files?
     done
 
 	# Srt File
     sort $project_home/$project-$DATETIME-grouped.jtl >> $project_home/$project-$DATETIME-sorted.jtl
 
+    
     # Insert TESTID
     if [ ! -z "$DB_HOST" ] ; then
         awk -v v_testid="$newTestid," '{print v_testid,$0}' $project_home/$project-$DATETIME-sorted.jtl >> $project_home/$project-$DATETIME-appended.jtl
@@ -948,7 +985,7 @@ function runcleanup() {
     if [ -e "$project_home/$project-$DATETIME-appended.jtl" ] ; then rm $project_home/$project-$DATETIME-appended.jtl ; fi
     if [ -e "$project_home/$project-$DATETIME-noblanks.jtl" ] ; then rm $project_home/$project-$DATETIME-noblanks.jtl ; fi
     mkdir -p $project_home/results/
-    mv $project_home/$project-$DATETIME-complete.jtl $project_home/results/
+    mv $project_home/$project-$DATETIME-complete.jtl $project_home/results/$DATETIME/
 
 	#***************************************************************************
 	# IMPORT RESULTS TO MYSQL DATABASE - IF SPECIFIED IN PROPERTIES
@@ -1015,6 +1052,8 @@ function runcleanup() {
     if [ stat --printf='' $project_home/$DATETIME*.out 2>/dev/null ] ; then rm $project_home/$DATETIME*.out ; fi
     if [ stat --printf='' $project_home/working* 2>/dev/null ] ; then rm $project_home/working* ; fi
 
+    rm -rf $project_home/*.out
+    rm -rf $project_home/working*
 
     echo
     echo "   -------------------------------------------------------------------------------------"
